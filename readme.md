@@ -16,7 +16,7 @@ Node.js + Express 是開發 REST API 時最常見的組合。
 
 如果你用的是 Express 5，其實已經支援原生 async function 錯誤攔截，連 async wrapper 都可以省下！
 
-## 1. Express 的錯誤處理 middleware 是怎麼運作的？
+## Express 的錯誤處理 middleware 是怎麼運作的？
 
 只要你呼叫 `next(err)`，Express 就會跳到錯誤處理 middleware：
 
@@ -29,7 +29,7 @@ app.use((err, req, res, next) => {
 
 這個 middleware 需要有四個參數，Express 會自動辨識它是錯誤處理 middleware。
 
-## 2. 同步錯誤怎麼處理？
+### 同步錯誤怎麼處理？
 
 這種最簡單，直接 throw 就可以：
 
@@ -41,9 +41,7 @@ app.get('/sync-error', (req, res) => {
 
 Express 會自動幫你捕捉，送進錯誤 middleware，不需要特別處理。
 
----
-
-## 3. async/await 的錯誤要小心
+### Express 4 async/await 的錯誤要小心
 
 Express 4 的情況：
 你可能會寫這樣的 code：
@@ -56,7 +54,7 @@ app.get('/async-error', async (req, res) => {
 
 這樣寫會直接讓整個程式 crash，因為 Express 4 不會自動處理 async function 裡的錯誤。
 
-### 解法：自己包一層 asyncWrapper
+#### 解法：自己包一層 asyncWrapper
 
 ```typescript
 export const asyncWrapper = (fn) => (req, res, next) => {
@@ -74,7 +72,7 @@ app.get('/async-error', asyncWrapper(async (req, res) => {
 
 這樣就能安全把錯誤丟給錯誤 middleware 處理。
 
-## 4. Express 5：原生支援 async function
+### Express 5：原生支援 async function
 
 如果你用的是 Express 5，那更簡單了，直接寫 async function，Express 就會自動捕捉錯誤，完全不需要 async wrapper！
 
@@ -95,7 +93,7 @@ app.get('/async-error', async (req, res) => {
 npm list express
 ```
 
-## 5. Stream error：Express 捕不到
+### Stream error：Express 捕不到
 
 問題在哪？
 stream 錯誤是透過 EventEmitter 的 'error' 事件傳遞，Express 根本不知道有這回事，例如：
@@ -107,7 +105,7 @@ app.get('/file', asyncWrapper(async (req, res) => {
 }))
 ```
 
-### 正確作法：自己監聽 'error'，再丟給 next()**
+#### 正確作法：自己監聽 'error'，再丟給 next()**
 
 ```typescript
 app.get('/file', asyncWrapper(async (req, res, next) => {
@@ -118,7 +116,7 @@ app.get('/file', asyncWrapper(async (req, res, next) => {
 }))
 ```
 
-### Bonus：包成一個工具函式
+#### Bonus：包成一個工具函式
 
 ```typescript
 // utils/streamErrorHandler.ts
@@ -140,12 +138,33 @@ app.get('/file', asyncWrapper(async (req, res, next) => {
 }))
 ```
 
-## 6. 整體範例程式
+## 整體範例程式
 
 ```typescript
 import express from 'express'
 import { asyncWrapper } from './utils/asyncWrapper'
 import { pipeWithErrorHandler } from './utils/streamErrorHandler'
+
+// 模擬 GCS 檔案物件
+function getSomeGCSFile(shouldError: boolean) {
+  const { Readable } = require('stream')
+  if (shouldError) {
+    // 會 emit error 的 stream
+    const stream = new Readable({
+      read() {
+        this.emit('error', new Error('stream error 測試'))
+      }
+    })
+    return {
+      createReadStream: () => stream
+    }
+  } else {
+    // 正常回傳資料
+    return {
+      createReadStream: () => Readable.from(['Hello World'])
+    }
+  }
+}
 
 const app = express()
 
@@ -155,14 +174,25 @@ app.get('/sync-error', (req, res) => {
 })
 
 // 非同步錯誤（Express 4 寫法）
-app.get('/async-error', asyncWrapper(async (req, res) => {
-  throw new Error('async/await 錯誤')
+app.get('/async-error-4', asyncWrapper(async (req, res) => {
+  throw new Error('async/await 錯誤, Express 4.x 以下的寫法')
 }))
 
-// stream error
+// 非同步錯誤（Express 5 寫法）
+app.get('/async-error', async (req, res) => {
+  throw new Error('async/await 錯誤')
+})
+
+// stream error（正確處理）
 app.get('/file', asyncWrapper(async (req, res, next) => {
-  const file = getSomeGCSFile()
+  const file = getSomeGCSFile(true)
   pipeWithErrorHandler(file.createReadStream(), res, next)
+}))
+
+// stream error（沒處理會 crash）
+app.get('/file-no-handle', asyncWrapper(async (req, res, next) => {
+  const file = getSomeGCSFile(true)
+  file.createReadStream().pipe(res)
 }))
 
 // 錯誤 middleware
@@ -178,12 +208,16 @@ app.listen(3000, () => {
 
 如果你用的是 Express 5，可以把 asyncWrapper 都拿掉，程式碼會更簡潔！
 
-## 7. 小結
+## 小結
 
 | 類型           | 會自動處理？         | 解法                                      |
 | -------------- | -------------------- | ----------------------------------------- |
 | 同步錯誤       | ✅ Express 自動處理   | 直接 throw 就好                           |
 | async/await 錯誤 | ❌ Express 4 不會處理<br>✅ Express 5 自動處理 | 用 asyncWrapper（Express 4）<br>或直接寫 async function（Express 5） |
 | Stream error   | ❌ 完全不會處理       | 監聽 stream.on('error', next)             |
+
+## 參考
+
+- <https://github.com/marsen/express-handle-err>
 
 (fin)
